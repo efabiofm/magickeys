@@ -13,7 +13,7 @@ namespace cAlgo.Robots
         [Parameter("Risk Percent", DefaultValue = 2)]
         public double RiskPercent { get; set; }
 
-        [Parameter("Margin (%)", DefaultValue = 0.1)]
+        [Parameter("Margin (%)", DefaultValue = 0)]
         public double Margin { get; set; }
 
         [Parameter("SL Line Comment", DefaultValue = "SL")]
@@ -149,13 +149,9 @@ namespace cAlgo.Robots
 
             Print($"Tipo: {tradeType}, Volumen: {normalizedVolume}, SL en pips: {stopLossPips}, nivel SL: {stopLossPrice}, riesgo usado: {adjustedRiskPercent}%");
 
-            var result = ExecuteMarketOrder(tradeType, SymbolName, normalizedVolume, "EntradaRiesgo", null, null);
+            var result = ExecuteMarketOrder(tradeType, SymbolName, normalizedVolume, "EntradaRiesgo", stopLossPips, null);
 
-            if (result.IsSuccessful && result.Position != null)
-            {
-                ModifyPosition(result.Position, stopLossPrice, null);
-            }
-            else
+            if (!result.IsSuccessful || result.Position == null)
             {
                 Print("No se pudo abrir la posición.");
             }
