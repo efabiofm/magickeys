@@ -9,6 +9,7 @@ namespace cAlgo.Robots
         private Button botonEntrada;
         private Button botonCerrarMitad;
         private Button botonSLBE;
+        private Button botonLimit; // NUEVO
 
         [Parameter("Risk Percent", DefaultValue = 2)]
         public double RiskPercent { get; set; }
@@ -19,6 +20,9 @@ namespace cAlgo.Robots
         [Parameter("SL Line Comment", DefaultValue = "SL")]
         public string SLLineComment { get; set; }
 
+        [Parameter("Entry Line Comment", DefaultValue = "ENTRY")]
+        public string EntryLineComment { get; set; }
+
         protected override void OnStart()
         {
             botonEntrada = new Button
@@ -28,14 +32,22 @@ namespace cAlgo.Robots
                 Height = 30,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(10, 10, 10, 10), // Derecha, primer botón arriba
+                Margin = new Thickness(10, 10, 10, 10),
                 BackgroundColor = Color.Green
             };
+            botonEntrada.Click += args => { EjecutarEntrada(); };
 
-            botonEntrada.Click += args =>
+            botonLimit = new Button
             {
-                EjecutarEntrada();
+                Text = "LIMIT",
+                Width = 60,
+                Height = 30,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(10, 10, 80, 10),
+                BackgroundColor = Color.Blue
             };
+            botonLimit.Click += args => { EjecutarLimit(); };
 
             botonCerrarMitad = new Button
             {
@@ -44,14 +56,10 @@ namespace cAlgo.Robots
                 Height = 30,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(10, 10, 80, 10), // Derecha, más abajo
+                Margin = new Thickness(10, 10, 150, 10),
                 BackgroundColor = Color.Orange
             };
-
-            botonCerrarMitad.Click += args =>
-            {
-                CerrarMitad();
-            };
+            botonCerrarMitad.Click += args => { CerrarMitad(); };
 
             botonSLBE = new Button
             {
@@ -60,34 +68,31 @@ namespace cAlgo.Robots
                 Height = 30,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(10, 10, 150, 10), // Derecha, más abajo aún
+                Margin = new Thickness(10, 10, 220, 10),
                 BackgroundColor = Color.Red
             };
-
-            botonSLBE.Click += args =>
-            {
-                SLtoBE();
-            };
+            botonSLBE.Click += args => { SLtoBE(); };
 
             Chart.AddControl(botonEntrada);
+            Chart.AddControl(botonLimit);
             Chart.AddControl(botonCerrarMitad);
             Chart.AddControl(botonSLBE);
         }
 
-        private void EjecutarEntrada()
+        private ChartHorizontalLine BuscarLinea(string comment)
         {
-            ChartHorizontalLine slLine = null;
-
             foreach (var obj in Chart.Objects)
             {
                 var line = obj as ChartHorizontalLine;
-                if (line != null && line.Comment == SLLineComment)
-                {
-                    slLine = line;
-                    break;
-                }
+                if (line != null && line.Comment == comment)
+                    return line;
             }
+            return null;
+        }
 
+        private void EjecutarEntrada()
+        {
+            var slLine = BuscarLinea(SLLineComment);
             if (slLine == null)
             {
                 Print("No se encontró una línea de SL con el comentario: " + SLLineComment);
@@ -95,37 +100,35 @@ namespace cAlgo.Robots
             }
 
             double stopLossPrice = slLine.Y;
-            double entryPrice = Symbol.Bid;
+            double bid = Symbol.Bid;
+            double ask = Symbol.Ask;
+
             TradeType tradeType;
+            double entryPrice;
+
+            if (ask > stopLossPrice)
+            {
+                tradeType = TradeType.Buy;
+                entryPrice = ask;
+            }
+            else
+            {
+                tradeType = TradeType.Sell;
+                entryPrice = bid;
+            }
+
             double adjustedRiskPercent = RiskPercent - Margin;
             if (adjustedRiskPercent <= 0)
             {
                 Print("El margen es demasiado grande en relación al riesgo.");
                 return;
             }
+
             double riskAmount = Account.Balance * (adjustedRiskPercent / 100.0);
-            double distanceToSL;
-
-            if (entryPrice > stopLossPrice)
-            {
-                tradeType = TradeType.Buy;
-                distanceToSL = entryPrice - stopLossPrice;
-            }
-            else
-            {
-                tradeType = TradeType.Sell;
-                entryPrice = Symbol.Ask;
-                distanceToSL = stopLossPrice - entryPrice;
-            }
-
-            if (distanceToSL <= 0)
-            {
-                Print("El SL está del lado incorrecto respecto al precio actual.");
-                return;
-            }
-
-            double pipValue = Symbol.PipValue;
             double pipSize = Symbol.PipSize;
+            double pipValue = Symbol.PipValue;
+
+            double distanceToSL = Math.Abs(entryPrice - stopLossPrice);
             double pips = distanceToSL / pipSize;
 
             if (pips < 0.01)
@@ -134,34 +137,102 @@ namespace cAlgo.Robots
                 return;
             }
 
-            // Cálculo del volumen ideal (en unidades)
             double volumeInUnits = riskAmount / (pips * pipValue);
 
-            // Redondeo hacia abajo al múltiplo permitido
-            double minVolume = Symbol.VolumeInUnitsMin;
-            double volumeStep = Symbol.VolumeInUnitsStep;
-            double normalizedVolume = Math.Floor(volumeInUnits / volumeStep) * volumeStep;
-
-            if (normalizedVolume < minVolume)
-                normalizedVolume = minVolume;
+            double normalizedVolume = Math.Max(
+                Symbol.VolumeInUnitsMin,
+                Symbol.NormalizeVolumeInUnits(volumeInUnits, RoundingMode.ToNearest)
+            );
 
             double stopLossPips = pips;
 
-            Print($"Tipo: {tradeType}, Volumen: {normalizedVolume}, SL en pips: {stopLossPips}, nivel SL: {stopLossPrice}, riesgo usado: {adjustedRiskPercent}%");
+            Print($"[MARKET] Tipo: {tradeType}, Vol: {normalizedVolume}, SL(pips): {stopLossPips}, SL: {stopLossPrice}, riesgo: {adjustedRiskPercent}%");
 
             var result = ExecuteMarketOrder(tradeType, SymbolName, normalizedVolume, "EntradaRiesgo", stopLossPips, null);
 
             if (!result.IsSuccessful || result.Position == null)
-            {
                 Print("No se pudo abrir la posición.");
+        }
+
+        // NUEVO: orden LIMIT con entrada desde línea ENTRY y SL desde línea SL
+        private void EjecutarLimit()
+        {
+            var slLine = BuscarLinea(SLLineComment);
+            if (slLine == null)
+            {
+                Print("No se encontró una línea de SL con el comentario: " + SLLineComment);
+                return;
             }
+
+            var entryLine = BuscarLinea(EntryLineComment);
+            if (entryLine == null)
+            {
+                Print("No se encontró una línea de ENTRY con el comentario: " + EntryLineComment);
+                return;
+            }
+
+            double entryPrice = entryLine.Y;
+            double stopLossPrice = slLine.Y;
+
+            double bid = Symbol.Bid;
+            double ask = Symbol.Ask;
+            double mid = (bid + ask) / 2.0;
+
+            // Tipo de orden limit según relación con el precio actual
+            TradeType tradeType = entryPrice < mid ? TradeType.Buy : TradeType.Sell;
+
+            // Validaciones de lado correcto del SL
+            if (tradeType == TradeType.Buy && !(stopLossPrice < entryPrice))
+            {
+                Print("Para BUY LIMIT, el SL debe estar por debajo del ENTRY.");
+                return;
+            }
+            if (tradeType == TradeType.Sell && !(stopLossPrice > entryPrice))
+            {
+                Print("Para SELL LIMIT, el SL debe estar por encima del ENTRY.");
+                return;
+            }
+
+            double adjustedRiskPercent = RiskPercent - Margin;
+            if (adjustedRiskPercent <= 0)
+            {
+                Print("El margen es demasiado grande en relación al riesgo.");
+                return;
+            }
+
+            double riskAmount = Account.Balance * (adjustedRiskPercent / 100.0);
+            double pipSize = Symbol.PipSize;
+            double pipValue = Symbol.PipValue;
+
+            double distanceToSL = Math.Abs(entryPrice - stopLossPrice);
+            double pips = distanceToSL / pipSize;
+
+            if (pips < 0.01)
+            {
+                Print("El SL está demasiado cerca del ENTRY.");
+                return;
+            }
+
+            // Tamaño por riesgo medido desde ENTRY hasta SL
+            double volumeInUnits = riskAmount / (pips * pipValue);
+            double normalizedVolume = Math.Max(
+                Symbol.VolumeInUnitsMin,
+                Symbol.NormalizeVolumeInUnits(volumeInUnits, RoundingMode.ToNearest)
+            );
+
+            double stopLossPips = pips;
+
+            Print($"[LIMIT] Tipo: {tradeType}, Vol: {normalizedVolume}, ENTRY: {entryPrice}, SL(pips): {stopLossPips}, SL: {stopLossPrice}, riesgo: {adjustedRiskPercent}%");
+
+            var result = PlaceLimitOrder(tradeType, SymbolName, normalizedVolume, entryPrice, "EntradaRiesgo_LIMIT", stopLossPips, null);
+
+            if (!result.IsSuccessful || result.PendingOrder == null)
+                Print("No se pudo colocar la orden LIMIT.");
         }
 
         private void CerrarMitad()
         {
-            // Busca la posición activa con el label que usó el bot al abrir
             var position = Positions.Find("EntradaRiesgo", SymbolName);
-
             if (position == null)
             {
                 Print("No hay posición activa para cerrar la mitad.");
@@ -169,19 +240,15 @@ namespace cAlgo.Robots
             }
 
             double currentVolume = position.VolumeInUnits;
-            double minVolume = Symbol.VolumeInUnitsMin;
-            double volumeStep = Symbol.VolumeInUnitsStep;
+            double halfVolume = Symbol.NormalizeVolumeInUnits(currentVolume / 2.0, RoundingMode.ToNearest);
 
-            double halfVolume = Math.Floor((currentVolume / 2) / volumeStep) * volumeStep;
-
-            if (halfVolume < minVolume)
+            if (halfVolume < Symbol.VolumeInUnitsMin)
             {
                 Print("El volumen para cerrar es menor que el mínimo permitido.");
                 return;
             }
 
             Print($"Cerrando {halfVolume} unidades (la mitad) de la posición.");
-
             ClosePosition(position, halfVolume);
         }
 
@@ -201,13 +268,11 @@ namespace cAlgo.Robots
             if ((position.TradeType == TradeType.Buy && currentPrice < breakEven) ||
                 (position.TradeType == TradeType.Sell && currentPrice > breakEven))
             {
-                // Precio está en contra: deja el SL, mueve el TP a BE
                 ModifyPosition(position, position.StopLoss, breakEven);
                 Print($"El precio está en contra, SL queda igual y TP movido a BE: {breakEven}");
             }
             else
             {
-                // Precio a favor: mueve el SL a BE (TP queda igual)
                 ModifyPosition(position, breakEven, position.TakeProfit);
                 Print($"SL movido a Break Even: {breakEven}");
             }
