@@ -178,18 +178,27 @@ namespace cAlgo.Robots
             double ask = Symbol.Ask;
             double mid = (bid + ask) / 2.0;
 
-            // Tipo de orden limit según relación con el precio actual
-            TradeType tradeType = entryPrice < mid ? TradeType.Buy : TradeType.Sell;
+            // Determinar lado por la posición del SL respecto al ENTRY
+            TradeType tradeType;
+            if (stopLossPrice < entryPrice)
+                tradeType = TradeType.Buy;          // SL debajo de ENTRY => largos
+            else if (stopLossPrice > entryPrice)
+                tradeType = TradeType.Sell;         // SL arriba de ENTRY => cortos
+            else
+            {
+                Print("SL y ENTRY no pueden estar al mismo nivel.");
+                return;
+            }
 
             // Validaciones de lado correcto del SL
             if (tradeType == TradeType.Buy && !(stopLossPrice < entryPrice))
             {
-                Print("Para BUY LIMIT, el SL debe estar por debajo del ENTRY.");
+                Print("Para BUY, el SL debe estar por debajo del ENTRY.");
                 return;
             }
             if (tradeType == TradeType.Sell && !(stopLossPrice > entryPrice))
             {
-                Print("Para SELL LIMIT, el SL debe estar por encima del ENTRY.");
+                Print("Para SELL, el SL debe estar por encima del ENTRY.");
                 return;
             }
 
@@ -206,7 +215,6 @@ namespace cAlgo.Robots
 
             double distanceToSL = Math.Abs(entryPrice - stopLossPrice);
             double pips = distanceToSL / pipSize;
-
             if (pips < 0.01)
             {
                 Print("El SL está demasiado cerca del ENTRY.");
@@ -222,12 +230,24 @@ namespace cAlgo.Robots
 
             double stopLossPips = pips;
 
-            Print($"[LIMIT] Tipo: {tradeType}, Vol: {normalizedVolume}, ENTRY: {entryPrice}, SL(pips): {stopLossPips}, SL: {stopLossPrice}, riesgo: {adjustedRiskPercent}%");
+            // Elegir tipo de orden pendiente según precio actual vs ENTRY
+            bool useStop;
+            if (tradeType == TradeType.Buy)
+                useStop = mid < entryPrice;   // Precio por debajo del ENTRY => BUY STOP
+            else
+                useStop = mid > entryPrice;   // Precio por encima del ENTRY => SELL STOP
 
-            var result = PlaceLimitOrder(tradeType, SymbolName, normalizedVolume, entryPrice, "EntradaRiesgo_LIMIT", stopLossPips, null);
+            string kind = useStop ? "STOP" : "LIMIT";
+            Print($"[{kind}] Tipo: {tradeType}, Vol: {normalizedVolume}, ENTRY: {entryPrice}, SL(pips): {stopLossPips}, SL: {stopLossPrice}, riesgo: {adjustedRiskPercent}%");
 
-            if (!result.IsSuccessful || result.PendingOrder == null)
-                Print("No se pudo colocar la orden LIMIT.");
+            TradeResult result;
+            if (useStop)
+                result = PlaceStopOrder(tradeType, SymbolName, normalizedVolume, entryPrice, "EntradaRiesgo_STOP", stopLossPips, null);
+            else
+                result = PlaceLimitOrder(tradeType, SymbolName, normalizedVolume, entryPrice, "EntradaRiesgo_LIMIT", stopLossPips, null);
+
+            if (!result.IsSuccessful || (result.PendingOrder == null))
+                Print($"No se pudo colocar la orden {kind}.");
         }
 
         private void CerrarMitad()
